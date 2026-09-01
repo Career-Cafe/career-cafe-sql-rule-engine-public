@@ -1,30 +1,30 @@
 services:
-  app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runner
-    container_name: sql-rule-engine-api
-    ports:
-      - "8000:8000"
-    environment:
-      PORT: 8000
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/sqlruleengine
-      SANDBOX_DATABASE_URL: postgresql://sandbox_ro:sandbox_ro@postgres:5432/sqlruleengine
-      REDIS_URL: redis://redis:6379
-    command: >
-      sh -c "pnpm db:migrate &&
-             node ./dist/db/seed.js &&
-             node ./dist/db/setup-sandbox-role.js &&
-             node ./dist/index.js"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - sql-engine-network
+  # app:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #     target: runner
+  #   container_name: sql-rule-engine-api
+  #   ports:
+  #     - "8000:8000"
+  #   environment:
+  #     PORT: 8000
+  #     DATABASE_URL: postgresql://postgres:postgres@postgres:5432/sqlruleengine
+  #     SANDBOX_DATABASE_URL: postgresql://sandbox_ro:sandbox_ro@postgres:5432/sqlruleengine
+  #     REDIS_URL: redis://redis:6379
+  #   command: >
+  #     sh -c "pnpm db:migrate &&
+  #            node ./dist/db/seed.js &&
+  #            node ./dist/db/setup-sandbox-role.js &&
+  #            node ./dist/index.js"
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #   restart: unless-stopped
+  #   networks:
+  #     - sql-engine-network
 
   postgres:
     image: postgres:16-alpine
@@ -58,6 +58,18 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+    networks:
+      - sql-engine-network
+
+  adminer:
+    image: adminer:latest
+    container_name: sql-engine-adminer
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - sql-engine-network

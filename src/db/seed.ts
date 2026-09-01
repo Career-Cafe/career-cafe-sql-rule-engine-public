@@ -1,6 +1,7 @@
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import { fileURLToPath } from "url";
+import { randomUUID } from "crypto";
 import { Pool } from "pg";
 import { settings } from "../config/settings.js";
 
@@ -28,41 +29,76 @@ function readJson<T>(path: string): T {
 
 async function seed(): Promise<void> {
   const pool = new Pool({ connectionString: settings.DATABASE_URL });
-  const problems = readJson<ProblemRecord[]>(problemsPath);
-  const expectedResults = readJson<ExpectedResultRecord[]>(expectedResultsPath);
+  const problemsData = readJson<ProblemRecord[]>(problemsPath);
+  const expectedResultsData = readJson<ExpectedResultRecord[]>(expectedResultsPath);
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    for (const problem of problems) {
+    // Create a mapping of problem_id to UUID for reference
+    const problemIdMap: Record<string, string> = {};
+
+    // Seed problems and problem_solutions
+    for (const problemRecord of problemsData) {
+      const problemId = randomUUID();
+      problemIdMap[problemRecord.problem_id] = problemId;
+
+      // Determine difficulty level from pattern or use as-is
+      const difficulty = problemRecord.pattern.split("/")[0].trim() || "intermediate";
+
+      // Insert problem
       await client.query(
-        `INSERT INTO problems (problem_id, title, pattern, schema_name, query)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (problem_id) DO UPDATE
-         SET title = EXCLUDED.title,
-             pattern = EXCLUDED.pattern,
-             schema_name = EXCLUDED.schema_name,
-             query = EXCLUDED.query`,
-        [problem.problem_id, problem.title, problem.pattern, problem.schema, problem.query],
+        `INSERT INTO problems (id, title, question_text, difficulty, is_free, created_at)
+         VALUES ($1, $2, $3, $4, $5, NOW())`,
+        [
+          problemId,
+          problemRecord.title,
+          `Solve: ${problemRecord.title}`, // Use generated question text
+          difficulty,
+          false, // Default to not free
+        ],
+      );
+
+      // Insert problem solution with the query as reference_solution_query
+      await client.query(
+        `INSERT INTO problem_solutions (id, problem_id, reference_solution_query, created_at)
+         VALUES ($1, $2, $3, NOW())`,
+        [randomUUID(), problemId, problemRecord.query],
       );
     }
 
-    for (const expected of expectedResults) {
+    // Seed expected results
+    for (const expectedRecord of expectedResultsData) {
+      const problemId = problemIdMap[expectedRecord.problem_id];
+      if (!problemId) {
+        console.warn(`No mapping found for problem_id: ${expectedRecord.problem_id}`);
+        continue;
+      }
+
+      // Parse result_rows if it's a string JSON
+      let rowsData;
+      try {
+        rowsData = typeof expectedRecord.result_rows === "string" 
+          ? JSON.parse(expectedRecord.result_rows) 
+          : expectedRecord.result_rows;
+      } catch {
+        rowsData = null;
+      }
+
+      // Insert expected result
       await client.query(
-        `INSERT INTO expected_results (problem_id, schema_name, result_hash, result_rows)
-         VALUES ($1, $2, $3, $4::jsonb)
-         ON CONFLICT (problem_id, schema_name) DO UPDATE
-         SET result_hash = EXCLUDED.result_hash,
-             result_rows = EXCLUDED.result_rows`,
-        [expected.problem_id, "ecommerce", expected.result_hash, expected.result_rows],
+        `INSERT INTO expected_results (id, problem_id, rows, rows_hash, is_active, generated_at)
+         VALUES ($1, $2, $3::jsonb, $4, $5, NOW())`,
+        [
+          randomUUID(),
+          problemId,
+          JSON.stringify(rowsData),
+          expectedRecord.result_hash,
+          true,
+        ],
       );
     }
-
-    // Seed the ecommerce schema
-    const ecommerceSeedPath = resolve(__dirname, "ecommerce-seed.sql");
-    const ecommerceSeedSql = readFileSync(ecommerceSeedPath, "utf-8");
-    await client.query(ecommerceSeedSql);
 
     await client.query("COMMIT");
   } catch (error) {

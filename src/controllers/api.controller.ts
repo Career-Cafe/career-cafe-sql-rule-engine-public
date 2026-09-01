@@ -10,8 +10,6 @@ import { evaluateSchema, fingerprintSchema, normalizeSchema, problemIdParamSchem
 import { submitSessionQuestion } from "../services/submission/submit-service.js";
 import { evaluateSqlFollowup } from "../services/evaluator/sql-followup-evaluator.js";
 import type { AuthenticatedRequest } from "../middlewares/auth.middleware.js";
-import { consumeRun } from "../services/run-limit/run-limit.service.js";
-import { recordRun } from "../services/run-limit/run-log.service.js";
 import { AppError } from "../utils/app-error.utils.js";
 
 // Problems Controllers
@@ -155,35 +153,14 @@ export const evaluateQueryController = async (req: Request, res: Response): Prom
       return;
     }
 
-    // Enforce the per-question run quota BEFORE executing anything (caps DB load).
-    // Throws AppError(429) when exhausted — handled below.
-    const quota = await consumeRun(userId, problem_id);
-
-    const startedAt = Date.now();
     const result = await evaluateQuery(sql, schema_name, problem_id);
-    const runtimeMs = Date.now() - startedAt;
-
-    // Track every run in history — best-effort, must not fail the request.
-    try {
-      await recordRun({
-        userId,
-        problemId: problem_id,
-        schemaName: schema_name,
-        sql,
-        correct: result.error ? false : (result.correct ?? null),
-        runtimeMs,
-        error: result.error ?? null,
-      });
-    } catch (logErr) {
-      console.error("Failed to record run history:", logErr);
-    }
 
     if (result.error) {
       ApiError(res, result.error, 400);
       return;
     }
 
-    ApiSuccess(res, "Query evaluated successfully", 200, { ...result, run_quota: quota });
+    ApiSuccess(res, "Query evaluated successfully", 200, result);
   } catch (e) {
     if (e instanceof AppError) {
       ApiError(res, e.message, e.statusCode, e.details, e.errorCode);

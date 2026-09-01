@@ -1,7 +1,7 @@
-import { index, pgTable, text, uniqueIndex, jsonb, boolean, integer, timestamp, uuid, varchar, primaryKey } from "drizzle-orm/pg-core";
+import { index, pgTable, text, uniqueIndex, jsonb, boolean, integer, timestamp, uuid, primaryKey } from "drizzle-orm/pg-core";
 
 // ============================================================
-// Auth: users + stateful refresh sessions
+// Auth: users
 // ============================================================
 
 export const users = pgTable(
@@ -17,8 +17,6 @@ export const users = pgTable(
   (table) => [uniqueIndex("users_email_idx").on(table.email)],
 );
 
-// One row per active refresh token. A refresh token only works while a matching
-// row exists here — this is what makes logout/revocation real.
 export const authSessions = pgTable(
   "auth_sessions",
   {
@@ -26,101 +24,167 @@ export const authSessions = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    refreshToken: varchar("refresh_token", { length: 500 }).notNull(),
+    refreshToken: text("refresh_token").notNull(),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
-  (table) => [index("auth_sessions_user_id_idx").on(table.userId)],
+  (table) => [uniqueIndex("auth_sessions_refresh_token_idx").on(table.refreshToken)],
 );
 
-export const problems = pgTable("problems", {
-  problemId: text("problem_id").primaryKey(),
-  title: text("title").notNull(),
-  pattern: text("pattern").notNull(),
-  schemaName: text("schema_name").notNull(),
-  query: text("query").notNull(),
-});
+// ============================================================
+// Problems
+// ============================================================
+
+export const problems = pgTable(
+  "problems",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    title: text("title").notNull(),
+    questionText: text("question_text").notNull(),
+    difficulty: text("difficulty").notNull(),
+    isFree: boolean("is_free").notNull().default(false),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [index("idx_problems_difficulty").on(table.difficulty)],
+);
+
+// ============================================================
+// Problem Solutions
+// ============================================================
+
+export const problemSolutions = pgTable(
+  "problem_solutions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    problemId: uuid("problem_id")
+      .notNull()
+      .references(() => problems.id, { onDelete: "cascade" }),
+    referenceSolutionQuery: text("reference_solution_query").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [index("idx_problem_solutions_problem_id").on(table.problemId)],
+);
+
+// ============================================================
+// Expected Results
+// ============================================================
 
 export const expectedResults = pgTable(
   "expected_results",
   {
-    problemId: text("problem_id")
+    id: uuid("id").primaryKey().defaultRandom(),
+    problemId: uuid("problem_id")
       .notNull()
-      .references(() => problems.problemId, { onDelete: "cascade" }),
-    schemaName: text("schema_name").notNull(),
-    resultHash: text("result_hash").notNull(),
-    resultRows: jsonb("result_rows"),
+      .references(() => problems.id, { onDelete: "cascade" }),
+    solutionId: uuid("solution_id"),
+    rows: jsonb("rows"),
+    rowsHash: text("rows_hash").notNull(),
+    ruleVersionSnapshot: integer("rule_version_snapshot"),
+    isActive: boolean("is_active").notNull().default(true),
+    generatedAt: timestamp("generated_at").notNull().defaultNow(),
   },
   (table) => [
     index("idx_expected_results_problem_id").on(table.problemId),
-    uniqueIndex("uniq_expected_results_problem_schema").on(table.problemId, table.schemaName),
+    index("idx_expected_results_is_active").on(table.isActive),
   ],
 );
 
+// ============================================================
+// Interview Sessions
+// ============================================================
 
-// I have added session_questions — tracks a student's question within a session
-export const sessionQuestions = pgTable("session_questions", {
-  id: text("id").primaryKey(),
-  userId: text("user_id").notNull(),
-  problemId: text("problem_id").references(() => problems.problemId),
-  sessionMode: text("session_mode").notNull().default("interview"),
-  createdAt: timestamp("created_at").defaultNow(),
-});
-
-// Per-user, per-problem execution quota. Caps how many times a user may run
-// (evaluate) the same problem — enforced by consumeRun() using MAX_RUNS_PER_QUESTION.
-export const problemRunCounts = pgTable(
-  "problem_run_counts",
-  {
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    problemId: text("problem_id")
-      .notNull()
-      .references(() => problems.problemId, { onDelete: "cascade" }),
-    runCount: integer("run_count").notNull().default(0),
-    updatedAt: timestamp("updated_at").notNull().defaultNow(),
-  },
-  (table) => [primaryKey({ columns: [table.userId, table.problemId] })],
-);
-
-// History log of every rule-engine run (one row per evaluate/execution). Lets us
-// track exactly what a user ran against each problem, with result + timing.
-export const problemRuns = pgTable(
-  "problem_runs",
+export const interviewSessions = pgTable(
+  "interview_sessions",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    problemId: text("problem_id")
-      .notNull()
-      .references(() => problems.problemId, { onDelete: "cascade" }),
-    schemaName: text("schema_name").notNull(),
-    sql: text("sql").notNull(),
-    correct: boolean("correct"),
-    runtimeMs: integer("runtime_ms"),
-    error: text("error"),
-    createdAt: timestamp("created_at").notNull().defaultNow(),
+    mode: text("mode").notNull().default("interview"),
+    status: text("status").notNull().default("active"),
+    startedAt: timestamp("started_at").notNull().defaultNow(),
+    endedAt: timestamp("ended_at"),
+    readinessCheckPassed: boolean("readiness_check_passed").notNull().default(false),
   },
   (table) => [
-    index("problem_runs_user_id_idx").on(table.userId),
-    index("problem_runs_problem_id_idx").on(table.problemId),
+    index("idx_interview_sessions_user_id").on(table.userId),
+    index("idx_interview_sessions_status").on(table.status),
   ],
 );
 
-// Now I have added attempts — the submission record for a session question
-export const attempts = pgTable("attempts", {
-  id: text("id").primaryKey(),
-  sessionQuestionId: text("session_question_id")
-    .notNull()
-    .references(() => sessionQuestions.id, { onDelete: "cascade" }),
-  finalQuery: text("final_query"),
-  explanationText: text("explanation_text"),
-  edgeCaseText: text("edge_case_text"),
-  isCorrect: boolean("is_correct"),
-  score: integer("score"),
-  finalSubmittedAt: timestamp("final_submitted_at").defaultNow(),
-  feedbackSummary: text("feedback_summary"),
-  rubricScores: jsonb("rubric_scores"),
-  ruleResults: jsonb("rule_results"),
-});
+// ============================================================
+// Session Questions
+// ============================================================
+
+export const sessionQuestions = pgTable(
+  "session_questions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => interviewSessions.id, { onDelete: "cascade" }),
+    problemId: uuid("problem_id")
+      .notNull()
+      .references(() => problems.id, { onDelete: "cascade" }),
+    orderIndex: integer("order_index").notNull(),
+    timerEnabled: boolean("timer_enabled").notNull().default(false),
+    timeLimitSeconds: integer("time_limit_seconds"),
+    status: text("status").notNull().default("pending"),
+    usedAt: timestamp("used_at"),
+  },
+  (table) => [
+    index("idx_session_questions_session_id").on(table.sessionId),
+    index("idx_session_questions_problem_id").on(table.problemId),
+  ],
+);
+
+// ============================================================
+// Attempts
+// ============================================================
+
+export const attempts = pgTable(
+  "attempts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sessionQuestionId: uuid("session_question_id")
+      .notNull()
+      .references(() => sessionQuestions.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    finalQuery: text("final_query"),
+    status: text("status").notNull().default("pending"),
+    score: integer("score"),
+    submittedAt: timestamp("submitted_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_attempts_session_question_id").on(table.sessionQuestionId),
+    index("idx_attempts_user_id").on(table.userId),
+  ],
+);
+
+// ============================================================
+// Attempt Runs
+// ============================================================
+
+export const attemptRuns = pgTable(
+  "attempt_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    attemptId: uuid("attempt_id").references(() => attempts.id, { onDelete: "cascade" }),
+    sessionQuestionId: uuid("session_question_id")
+      .notNull()
+      .references(() => sessionQuestions.id, { onDelete: "cascade" }),
+    queryText: text("query_text").notNull(),
+    queryHash: text("query_hash").notNull(),
+    output: jsonb("output"),
+    errorText: text("error_text"),
+    runtimeMs: integer("runtime_ms"),
+    ruleVersionUsed: integer("rule_version_used"),
+    ranAt: timestamp("ran_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_attempt_runs_attempt_id").on(table.attemptId),
+    index("idx_attempt_runs_session_question_id").on(table.sessionQuestionId),
+    index("idx_attempt_runs_query_hash").on(table.queryHash),
+  ],
+);
