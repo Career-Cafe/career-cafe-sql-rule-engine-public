@@ -1,18 +1,16 @@
 import { Router } from "express";
 import {
-  getAllProblems,
-  getProblemByIdController,
   normalize,
   generateFingerprintController,
   runRulesController,
   evaluateQueryController,
+  finalSubmitController,
+  evaluateFollowupController,
 } from "../controllers/api.controller.js";
 
+// Protected rule-engine routes. Problem browsing lives in the public
+// problemsRouter; everything here runs behind authMiddleware (see index.ts).
 export const apiRouter = Router();
-
-// Problems endpoints
-apiRouter.get("/problems", getAllProblems);
-apiRouter.get("/problems/:problemId", getProblemByIdController);
 
 // SQL normalization
 apiRouter.post("/normalize", normalize);
@@ -25,3 +23,9 @@ apiRouter.post("/rules", runRulesController);
 
 // Query evaluation
 apiRouter.post("/evaluate", evaluateQueryController);
+
+// Final Submit
+apiRouter.post("/sql/session-questions/:sessionQuestionId/submit", finalSubmitController);
+
+// Standalone Followup Evaluation
+apiRouter.post("/sql/attempts/:attemptId/evaluate-followup", evaluateFollowupController);
